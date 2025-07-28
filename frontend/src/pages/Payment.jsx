@@ -11,11 +11,20 @@ function Payment() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // Use VITE_BACKEND_URL from environment variables for all backend calls
+  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5001';
+
   const handlePaymentSuccess = async (response) => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
-      
+
+      // --- Added token check ---
+      if (!token) {
+        throw new Error('User not authenticated. Please log in.');
+      }
+      // ------------------------
+
       console.log('Payment Success Response:', response);
       console.log('Project Data:', project);
 
@@ -35,10 +44,12 @@ function Payment() {
         razorpay_order_id: response.razorpay_order_id
       };
 
-      console.log('Sending payment data:', paymentData);
+      console.log('Sending payment data to:', `${BACKEND_URL}/api/payments/create`);
+      console.log('Payment data:', paymentData);
+      console.log('Token for /api/payments/create:', token ? 'Present' : 'Missing'); // Debugging token presence
 
       const paymentResponse = await axios.post(
-        'http://localhost:5001/api/payments/create',
+        `${BACKEND_URL}/api/payments/create`, // Using BACKEND_URL
         paymentData,
         {
           headers: {
@@ -55,10 +66,25 @@ function Payment() {
       }
 
       // Update project funds
-      const fundUpdateResponse = await axios.post('http://localhost:5001/update-funds', {
-        projectId: project._id,
-        amount: Number(project.amount)
-      });
+      console.log('Sending fund update to:', `${BACKEND_URL}/update-funds`);
+      console.log('Fund update data: Project ID', project._id, 'Amount:', project.amount);
+      console.log('Token for /update-funds:', token ? 'Present' : 'Missing'); // Debugging token presence
+
+      // --- CRUCIAL FIX: Added Authorization header to update-funds call ---
+      const fundUpdateResponse = await axios.post(
+        `${BACKEND_URL}/update-funds`, // Using BACKEND_URL
+        {
+          projectId: project._id,
+          amount: Number(project.amount)
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`, // <--- THIS WAS ADDED/CORRECTED
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      // ------------------------------------------------------------------
 
       console.log('Fund update response:', fundUpdateResponse.data);
 
@@ -67,7 +93,7 @@ function Payment() {
       }
 
       triggerRefresh();
-      
+
       // Show success message and redirect
       alert('Payment successful! Thank you for your contribution.');
       navigate(`/project-details/${project._id}`);
@@ -77,13 +103,15 @@ function Payment() {
         response: error.response?.data,
         status: error.response?.status,
         project: project,
-        razorpayResponse: response
+        razorpayResponse: response,
+        // Optional: Include token for debugging if not sensitive for your logs
+        // tokenDebug: localStorage.getItem('token')
       });
-      
+
       setError(
-        error.response?.data?.message || 
-        error.message || 
-        'Failed to record payment. Please contact support with payment ID: ' + 
+        error.response?.data?.message ||
+        error.message ||
+        'Failed to record payment. Please contact support with payment ID: ' +
         (response?.razorpay_payment_id || 'UNKNOWN')
       );
     } finally {
@@ -94,24 +122,31 @@ function Payment() {
   const displayRazorpay = async () => {
     try {
       setLoading(true);
-      setError(null); // Clear any previous errors
-      
+      setError(null);
+
+      console.log('Razorpay Key ID:', import.meta.env.VITE_RAZORPAY_KEY_ID); // Prints fine
+      console.log('Project amount:', project.amount); // Ensure this prints a valid number
+
       if (!project.amount || Number(project.amount) <= 0) {
         throw new Error('Invalid payment amount');
       }
 
-      const response = await axios.post('http://localhost:5001/create-order', {
+      const response = await axios.post(`${BACKEND_URL}/create-order`, {
         amount: Number(project.amount)
       });
 
-      console.log('Order creation response:', response.data);
+      console.log('Order creation response from backend:', response.data); // This should print
 
       if (!response.data.order || !response.data.order.id) {
         throw new Error('Failed to create payment order');
       }
 
+      // --- ADD THIS NEW LOG LINE ---
+      console.log('*** Execution Reached: After successful order creation check. ***');
+      // -----------------------------
+
       const options = {
-        key: process.env.RAZORPAY_KEY_ID || 'rzp_test_v6QuFUBbGZI0Iq',
+        key: import.meta.env.VITE_RAZORPAY_KEY_ID, // Or "rzp_test_vucqcBUbDGj0LU" with quotes
         amount: response.data.order.amount,
         currency: "INR",
         name: "CrowdFund",
@@ -133,8 +168,21 @@ function Payment() {
         }
       };
 
+      // These logs should print if the above "Reached" log prints
+      console.log('Full options object being passed to Razorpay:', options);
+      console.log('Value of options.key:', options.key);
+
+      // Ensure Razorpay SDK is loaded
+      if (typeof window.Razorpay === 'undefined') {
+        console.error('Razorpay SDK is not loaded. Ensure the script is in index.html.');
+        setError('Payment gateway not ready. Please try again or refresh the page.');
+        setLoading(false);
+        return;
+      }
+
       const razorpayWindow = new window.Razorpay(options);
       razorpayWindow.open();
+
     } catch (error) {
       console.error('Error initiating payment:', {
         error: error.message,
@@ -142,16 +190,15 @@ function Payment() {
         status: error.response?.status,
         project: project
       });
-      
+
       setError(
-        error.response?.data?.message || 
-        error.message || 
+        error.response?.data?.message ||
+        error.message ||
         'Failed to initiate payment. Please try again.'
       );
       setLoading(false);
     }
   };
-
   if (!project) {
     return <div className="text-center py-10">No project details found</div>;
   }

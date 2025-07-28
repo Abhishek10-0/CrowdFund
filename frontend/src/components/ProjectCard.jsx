@@ -21,6 +21,7 @@ const ProjectCard = ({ project, isCompact = false }) => {
   };
 
   const handleAmountSubmit = async (e) => {
+console.log('Razorpay Key ID:', import.meta.env.VITE_RAZORPAY_KEY_ID);
     e.stopPropagation(); // Prevent card click
     
     const token = localStorage.getItem('token');
